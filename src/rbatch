@@ -1,0 +1,136 @@
+#!/bin/bash
+
+# usage: rbatch [options] infile
+#        rbatch [options] -- [sbatch_options] [--rargs=<expressions>] infile
+#
+#     * options: specify options native to rbatch
+#
+#     * sbatch_options: specify options to pass to Slurm
+#
+#     * rargs: R expressions to pass to R script via --args
+#
+
+
+
+
+# Parse command-line arguments -------------------------------------------------
+
+# Parse rbatch-specific command-line options 
+while getopts 'de:j:m:o:v' option
+do
+    case "$option" in
+
+	d) dry_run_bool=TRUE ;;
+
+	e) email_addr="$OPTARG" ;;
+
+	j) jobname="$OPTARG" ;;
+
+	m) markup="$OPTARG" ;;
+
+	o) outdir="$OPTARG" ;;
+
+	v) verbose_bool=TRUE ;;
+
+	\?) exit 1 ;;
+    esac
+done
+
+# If unspecified then provide default arguments
+: ${jobname:=job}
+: ${markup:="$(date +%F)"}
+: ${outdir:="$PWD"}
+: ${email_addr="$LOGNAME@live.unc.edu"}
+
+# Calculate the number of arguments processed, and the number remaining to be
+# processed
+n_args=$((OPTIND - 1))
+n_remain=$(($# - n_args))
+
+# If getopts loop does not end on --, then the only remaining argument allowed
+# is infile
+if eval [[ \$$n_args != "--" ]] && [[ $n_remain -gt 1 ]]
+then
+    echo "error: too many arguments remaining after [options]" >&2
+    exit 1
+fi
+
+# Move args past rbatch options
+shift $n_args
+[[ $# -eq 0 ]] && { echo "error: no argument provided for infile" >&2; exit 1; }
+
+# Read the sbatch options into an array for later use; if the --rargs option is
+# encountered then read that into $rargs
+sbatch_opts=()
+while [[ $# -gt 1 ]]
+do
+    case "$1" in
+
+	--rargs=?*) rargs="'--args ${$1#--rargs=}'" ;;
+
+	*) sbatch_opts+=("$1") ;;
+    esac
+
+    shift
+done
+
+: ${rargs:='\b'}
+
+# Read infile into $infile
+infile="'$1'"
+
+
+
+
+# Check for exported rbatch option flags ---------------------------------------
+
+rbatch_opts=()
+
+
+
+# Check for exported R option flags --------------------------------------------
+
+ropts=()
+[[ -v R_ARCH ]]         && ropts+=("--arch=$R_ARCH")
+[[ -v R_NO_ENVIRON ]]   && ropts+=('--no-environ')
+[[ -v R_NO_INIT_FILE ]] && ropts+=('--no-init-file')
+[[ -v R_NO_SITE_FILE ]] && ropts+=('--no-site-file')
+[[ -v R_VANILLA ]]      && ropts+=('--vanilla')
+
+
+
+
+# Create sbatch script ---------------------------------------------------------
+
+slurm_script=$(
+    echo '#!/bin/bash'
+    echo
+    echo "#SBATCH --output=$jobname-$markup.out"
+    echo "#SBATCH --mail-type=END"
+    echo "#SBATCH --mail-user=$email_addr"
+    echo "#SBATCH --job-name=$jobname-$markup"
+    echo
+    for curr in "${sbatch_opts[@]}"
+    do
+	echo "#SBATCH $curr"
+    done;
+    [[ ${#sbatch_opts[@]} -gt 0 ]] && echo
+    printf "srun R312 CMD BATCH $rargs $infile '$jobname-$markup.Rout'"
+)
+
+
+
+
+# Write script to stdout / sbatch ----------------------------------------------
+
+if [[ "$verbose_bool" = 'TRUE' ]] || [[ "$dry_run_bool" = 'TRUE' ]]
+then
+    echo "$slurm_script"
+fi
+
+# For the developemental stage don't actually call sbatch
+if [[ -z $dry_run ]]
+then
+    echo
+    echo '*** Future versions: call sbatch here! ***'
+fi
